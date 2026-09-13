@@ -1,0 +1,16 @@
+# 运行期产生的文件，别提交
+config.json
+keypool.db
+keypool.db-wal
+keypool.db-shm
+keypool.db.bak-*
+
+# 检测名单是部署者自己填的（目录保留，内容不提交）
+models/*.txt
+models/*.txt.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

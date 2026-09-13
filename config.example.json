@@ -1,0 +1,26 @@
+{
+  "_说明": "复制成 config.json 再改；字段含义见 DEPLOY.md / README.md",
+  "_说明_部署": "如果由 AI 部署：群号、池模式、检测名单、播报群这四项要先问部署者（见 DEPLOY.md）",
+  "onebot_url": "http://127.0.0.1:3000",
+  "onebot_token": "",
+  "listen_host": "127.0.0.1",
+  "listen_port": 3020,
+  "self_qq": 10000,
+  "group_whitelist": [
+    123456789
+  ],
+  "daily_group_whitelist": [
+    123456789
+  ],
+  "pool_mode": "per_group",
+  "model_list_mode": "per_pool",
+  "seq_limit": 99,
+  "insecure_tls": false,
+  "http_timeout": 20,
+  "secondary": {
+    "enabled": false,
+    "ssh_target": "",
+    "script_path": "/opt/keypool-relay/relay_probe.py",
+    "label": "备用"
+  }
+}
