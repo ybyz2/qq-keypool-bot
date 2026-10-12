@@ -177,6 +177,47 @@ def _timeout_value(timeout: float | int) -> float:
     return value
 
 
+def ascii_url(url: str) -> str:
+    """把 URL 规范成纯 ASCII（中文域名走 IDNA、非 ASCII 路径/查询走百分号编码）。
+
+    为什么必须有这一步：http.client 用 **latin-1** 编码请求头，而 urllib 不会
+    自动做 IDNA。地址里只要出现非 ASCII（典型：群友投的中文域名中转站
+    https://s.仙桥聚合.com ），发请求时就会抛
+    UnicodeEncodeError: 'latin-1' codec can't encode characters ——
+    整轮采集/日报直接崩掉，且每个整点都重演。
+    这里在唯一出口把 host 转 punycode、把 path/query 转百分号编码，
+    让 URL 落到 ASCII 后再交给 urllib。
+    """
+
+    parts = urlsplit(url)
+    if not parts.netloc:
+        return url
+    netloc = parts.netloc
+    userinfo = ""
+    if "@" in netloc:
+        userinfo, netloc = netloc.rsplit("@", 1)
+        userinfo += "@"
+    host = parts.hostname or ""
+    try:
+        ascii_host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        # 非法域名（长度/标签不合规）不在这里判死，原样交给 urllib 报错
+        ascii_host = host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        ascii_host = f"{ascii_host}:{port}"
+    return urlunsplit((
+        parts.scheme,
+        userinfo + ascii_host,
+        quote(parts.path, safe="/%:@!$&'()*+,;=~-._"),
+        quote(parts.query, safe="=&%:@!$'()*+,;/?~-._"),
+        quote(parts.fragment, safe="=&%:@!$'()*+,;/?~-._"),
+    ))
+
+
 def _open(request: Request, timeout: float | int, insecure_tls: bool) -> HTTPResponse:
     """打开一个请求；仅在明确配置时跳过 TLS 证书校验。"""
 
@@ -210,8 +251,9 @@ def _request_json(
         encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request_headers["Content-Type"] = "application/json"
 
+    # 中文域名/中文路径在这里落成纯 ASCII，否则 http.client 会在编码请求头时抛错
     request = Request(
-        url,
+        ascii_url(url),
         data=encoded,
         headers=request_headers,
         method=method,
@@ -446,7 +488,7 @@ def collect_domain_model_details(
             timeout=timeout,
             insecure_tls=insecure_tls,
         )
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, UnicodeError):
         return None
 
     if pricing.status != 200:
@@ -469,7 +511,7 @@ def collect_domain_model_details(
                 timeout=timeout,
                 insecure_tls=insecure_tls,
             )
-        except (URLError, OSError, TimeoutError):
+        except (URLError, OSError, TimeoutError, UnicodeError):
             details[name] = ("不支持", None)
             continue
         if perf.status != 200:
@@ -533,7 +575,7 @@ def collect_domain_by_key(
             timeout=timeout,
             insecure_tls=insecure_tls,
         )
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, UnicodeError):
         return {name: "不支持" for name in names}
     if response.status != 200:
         if _is_cloudflare_blocked(response.text):
@@ -650,7 +692,7 @@ def collect_statuses_auto(
                 insecure_tls=insecure_tls,
             )
             ids = list(_extract_model_ids(resp.data)) if resp.status == 200 else []
-        except (URLError, OSError, TimeoutError):
+        except (URLError, OSError, TimeoutError, UnicodeError):
             ids = []
         chosen = select_fallback_models(ids, n)
         # 补选出来的模型也顺手采一次站点级状态/可用率（采不到就只记「可用」）
@@ -778,7 +820,7 @@ def _check_key_once(
             timeout=timeout,
             insecure_tls=insecure_tls,
         )
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, UnicodeError):
         return ProbeResult("unknown", "连接失败", ())
 
     models = _extract_model_ids(models_response.data)
@@ -818,7 +860,7 @@ def _check_key_once(
             timeout=timeout,
             insecure_tls=insecure_tls,
         )
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, UnicodeError):
         return ProbeResult("unknown", "连接失败", models)
 
     if chat_response.status == 401:
@@ -977,7 +1019,7 @@ def _balance_get(
             timeout=timeout,
             insecure_tls=insecure_tls,
         )
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, UnicodeError):
         return None
     return response if response.status == 200 else None
 

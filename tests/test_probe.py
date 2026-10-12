@@ -283,5 +283,83 @@ class KeyProbeTests(unittest.TestCase):
         self.assertFalse(result.exhausted)
 
 
+class ChineseDomainTests(unittest.TestCase):
+    """2026-10-12 线上故障：群友投了中文域名，整轮采集崩在 latin-1。
+
+    复现：库里存了 https://s.仙桥聚合.com ，update.py / daily.py 一跑就抛
+    UnicodeEncodeError: 'latin-1' codec can't encode characters —— http.client
+    用 latin-1 编码请求头，而 urllib 不会自动做 IDNA。事故连续两天，每小时
+    重演一次，models 表停在故障时刻。
+    """
+
+    CN_URL = "https://s.仙桥聚合.com"
+
+    def test_ascii_url_punycodes_chinese_host(self):
+        # 中文域名必须落成 punycode，且整体是纯 ASCII
+        out = probe.ascii_url(self.CN_URL + "/api/pricing")
+        out.encode("ascii")                      # 不抛 = 修好了
+        self.assertEqual(out, "https://s.xn--cnq39j20u6sw.com/api/pricing")
+
+    def test_ascii_url_keeps_port_and_scheme(self):
+        self.assertEqual(
+            probe.ascii_url("https://s.仙桥聚合.com:8443/v1"),
+            "https://s.xn--cnq39j20u6sw.com:8443/v1",
+        )
+        self.assertEqual(
+            probe.ascii_url("http://s.仙桥聚合.com/v1"),
+            "http://s.xn--cnq39j20u6sw.com/v1",
+        )
+
+    def test_ascii_url_percent_encodes_path_and_query(self):
+        # 非 ASCII 路径/查询同样会炸请求头，必须一并编码
+        self.assertEqual(
+            probe.ascii_url("https://example.com/接口/pricing"),
+            "https://example.com/%E6%8E%A5%E5%8F%A3/pricing",
+        )
+        self.assertEqual(
+            probe.ascii_url("https://example.com/api/perf?model=深度求索"),
+            "https://example.com/api/perf?model=%E6%B7%B1%E5%BA%A6%E6%B1%82%E7%B4%A2",
+        )
+
+    def test_ascii_url_leaves_ascii_urls_untouched(self):
+        # 纯 ASCII 地址（含已 punycode、已百分号编码、带端口、localhost）不许被改动
+        for url in (
+            "https://example.com/api/pricing",
+            "https://ai.baipiao.co/",
+            "https://xn--already-punycode.com/x",
+            "https://sub.domain.example.com:443/v1/models",
+            "https://example.com/a%20b/c",
+            "http://localhost:3020/onebot",
+        ):
+            self.assertEqual(probe.ascii_url(url), url)
+
+    @patch("probe.urlopen")
+    def test_request_uses_ascii_url_so_headers_encode(self, urlopen):
+        # 端到端：_request_json 交给 urlopen 的必须是纯 ASCII 的 URL
+        urlopen.return_value = FakeResponse(200, {"ok": True})
+        probe._request_json(self.CN_URL + "/api/pricing", timeout=5)
+        sent = urlopen.call_args[0][0]
+        sent.full_url.encode("ascii")            # 不抛 = 请求头不会炸
+        self.assertEqual(sent.host, "s.xn--cnq39j20u6sw.com")
+
+    @patch("probe.urlopen")
+    def test_chinese_domain_does_not_kill_the_whole_run(self, urlopen):
+        # 坏域名只影响它自己：网络层捕获 UnicodeError 后按「连不上」处理
+        urlopen.side_effect = UnicodeEncodeError(
+            "latin-1", "s.仙桥聚合.com", 2, 6, "ordinal not in range(256)")
+        result = probe.check_key(self.CN_URL + "/v1", "sk-x")
+        self.assertEqual(result.status, "unknown")
+        self.assertEqual(result.reason, "连接失败")
+
+    def test_probe_balance_survives_chinese_domain(self):
+        # 余额探测同样要能构造出 ASCII 请求（真实网络不通也没关系，
+        # 这里只要求不抛 UnicodeEncodeError）
+        try:
+            probe.probe_balance(self.CN_URL, "sk-x", timeout=3)
+        except UnicodeError as exc:              # pragma: no cover
+            self.fail(f"余额探测仍在中文域名上抛 UnicodeError: {exc}")
+        except (URLError, OSError, TimeoutError):
+            pass                                 # 网络不可达属于正常路径
+
 if __name__ == "__main__":
     unittest.main()
